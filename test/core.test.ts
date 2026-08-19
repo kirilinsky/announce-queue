@@ -12,7 +12,8 @@ beforeEach(() => {
   assertiveEl = document.createElement('div')
   politeEl = document.createElement('div')
   document.body.append(assertiveEl, politeEl)
-  queue = createAnnounceQueue()
+  // Fixed lifetime keeps the timing assertions readable; 'auto' is covered on its own.
+  queue = createAnnounceQueue({ clearAfter: 1000 })
   queue.attach(assertiveEl, politeEl)
 })
 
@@ -27,12 +28,29 @@ describe('createAnnounceQueue', () => {
     queue.announce('hello')
     expect(texts(politeEl)).toEqual([])
 
-    vi.advanceTimersByTime(150)
+    vi.advanceTimersByTime(0)
     expect(texts(politeEl)).toEqual(['hello'])
     expect(texts(assertiveEl)).toEqual([])
   })
 
-  it('drains assertive before queued polite messages', () => {
+  it('holds one node per priority: the next waits for clearAfter plus cooldown', () => {
+    queue.announce('a')
+    queue.announce('b')
+
+    vi.advanceTimersByTime(0)
+    expect(texts(politeEl)).toEqual(['a'])
+
+    vi.advanceTimersByTime(1000) // 'a' removed, cooldown still running
+    expect(texts(politeEl)).toEqual([])
+
+    vi.advanceTimersByTime(149)
+    expect(texts(politeEl)).toEqual([])
+
+    vi.advanceTimersByTime(1)
+    expect(texts(politeEl)).toEqual(['b'])
+  })
+
+  it('lets assertive go first and keeps polite silent while the alert is up', () => {
     queue.announce('polite one')
     queue.announce('polite two')
     queue.announce('urgent', { priority: 'assertive' })
@@ -41,22 +59,26 @@ describe('createAnnounceQueue', () => {
     expect(texts(assertiveEl)).toEqual(['urgent'])
     expect(texts(politeEl)).toEqual([])
 
-    vi.advanceTimersByTime(150)
+    vi.advanceTimersByTime(1000) // alert removed
+    expect(texts(assertiveEl)).toEqual([])
+    expect(texts(politeEl)).toEqual([])
+
+    vi.advanceTimersByTime(150) // polite lane free again
     expect(texts(politeEl)).toEqual(['polite one'])
+
+    vi.advanceTimersByTime(1150)
+    expect(texts(politeEl)).toEqual(['polite two'])
   })
 
-  it('spaces messages of one priority by cooldown', () => {
-    queue.announce('a')
-    queue.announce('b')
-
+  it('interrupts a live polite node when an assertive message arrives', () => {
+    queue.announce('slow update', { clearAfter: 5000 })
     vi.advanceTimersByTime(0)
-    expect(texts(politeEl)).toEqual(['a'])
+    expect(texts(politeEl)).toEqual(['slow update'])
 
-    vi.advanceTimersByTime(149)
-    expect(texts(politeEl)).toEqual(['a'])
-
-    vi.advanceTimersByTime(1)
-    expect(texts(politeEl)).toEqual(['a', 'b'])
+    queue.announce('connection lost', { priority: 'assertive' })
+    vi.advanceTimersByTime(0)
+    expect(texts(assertiveEl)).toEqual(['connection lost'])
+    expect(texts(politeEl)).toEqual([]) // cut off, not left underneath the alert
   })
 
   it('dedupes identical messages still pending in the same priority', () => {
@@ -72,7 +94,7 @@ describe('createAnnounceQueue', () => {
     vi.advanceTimersByTime(1000) // inserted, then cleared by clearAfter
 
     queue.announce('same')
-    vi.advanceTimersByTime(150)
+    vi.advanceTimersByTime(150) // cooldown after the previous node
     expect(texts(politeEl)).toEqual(['same'])
   })
 
@@ -80,8 +102,10 @@ describe('createAnnounceQueue', () => {
     queue.announce('dup')
     queue.announce('dup', { priority: 'assertive' })
 
-    vi.advanceTimersByTime(150)
+    vi.advanceTimersByTime(0)
     expect(texts(assertiveEl)).toEqual(['dup'])
+
+    vi.advanceTimersByTime(1150)
     expect(texts(politeEl)).toEqual(['dup'])
   })
 
@@ -89,8 +113,11 @@ describe('createAnnounceQueue', () => {
     queue.announce('twice', { dedupe: false })
     queue.announce('twice', { dedupe: false })
 
-    vi.advanceTimersByTime(150)
-    expect(texts(politeEl)).toEqual(['twice', 'twice'])
+    vi.advanceTimersByTime(0)
+    expect(texts(politeEl)).toEqual(['twice'])
+
+    vi.advanceTimersByTime(1150)
+    expect(texts(politeEl)).toEqual(['twice'])
   })
 
   it('always creates a fresh node instead of mutating an existing one', () => {
@@ -99,13 +126,12 @@ describe('createAnnounceQueue', () => {
     const firstNode = politeEl.firstElementChild!
 
     queue.announce('second', { clearAfter: 10_000 })
-    vi.advanceTimersByTime(150)
+    vi.advanceTimersByTime(10_150)
 
-    expect(politeEl.children).toHaveLength(2)
-    expect(politeEl.firstElementChild).toBe(firstNode)
-    expect(firstNode.textContent).toBe('first')
-    expect(politeEl.lastElementChild).not.toBe(firstNode)
-    expect(politeEl.lastElementChild!.textContent).toBe('second')
+    expect(politeEl.children).toHaveLength(1)
+    expect(firstNode.textContent).toBe('first') // never rewritten in place
+    expect(politeEl.firstElementChild).not.toBe(firstNode)
+    expect(politeEl.firstElementChild!.textContent).toBe('second')
   })
 
   it('removes each node after clearAfter', () => {
@@ -126,24 +152,26 @@ describe('createAnnounceQueue', () => {
 
     custom.announce('one')
     custom.announce('two')
-    vi.advanceTimersByTime(50)
-    expect(texts(politeEl)).toEqual(['one', 'two'])
+    vi.advanceTimersByTime(0)
+    expect(texts(politeEl)).toEqual(['one'])
 
-    vi.advanceTimersByTime(100)
-    expect(politeEl.children).toHaveLength(0)
+    vi.advanceTimersByTime(150) // 100 lifetime + 50 cooldown
+    expect(texts(politeEl)).toEqual(['two'])
 
-    // cooldown counts from the previous insertion (t=50), not from announce() (t=150)
-    custom.announce('slow', { cooldown: 400 })
-    vi.advanceTimersByTime(299)
-    expect(politeEl.children).toHaveLength(0)
+    vi.advanceTimersByTime(150)
+    custom.announce('long', { clearAfter: 400 })
+    vi.advanceTimersByTime(0)
+    expect(texts(politeEl)).toEqual(['long'])
+    vi.advanceTimersByTime(399)
+    expect(texts(politeEl)).toEqual(['long'])
     vi.advanceTimersByTime(1)
-    expect(texts(politeEl)).toEqual(['slow'])
+    expect(texts(politeEl)).toEqual([])
 
     custom.destroy()
   })
 
   it('buffers messages announced before attach', () => {
-    const detached = createAnnounceQueue()
+    const detached = createAnnounceQueue({ clearAfter: 1000 })
     detached.announce('early')
     vi.advanceTimersByTime(1000)
     expect(texts(politeEl)).toEqual([])
@@ -153,6 +181,128 @@ describe('createAnnounceQueue', () => {
     expect(texts(politeEl)).toEqual(['early'])
 
     detached.destroy()
+  })
+
+  it("derives the node lifetime from the message when clearAfter is 'auto'", () => {
+    const auto = createAnnounceQueue()
+    auto.attach(assertiveEl, politeEl)
+
+    auto.announce('Saved')
+    vi.advanceTimersByTime(0)
+    vi.advanceTimersByTime(999)
+    expect(texts(politeEl)).toEqual(['Saved']) // short text still gets the 1000ms floor
+    vi.advanceTimersByTime(1)
+    expect(texts(politeEl)).toEqual([])
+
+    vi.advanceTimersByTime(150)
+    auto.announce('12 rows imported from the CSV file, 2 skipped')
+    vi.advanceTimersByTime(1200)
+    expect(politeEl.children).toHaveLength(1) // longer text is held longer
+
+    auto.destroy()
+  })
+
+  it('drops the stalest pending messages once maxQueue is exceeded', () => {
+    const dropped: string[] = []
+    const capped = createAnnounceQueue({
+      clearAfter: 1000,
+      maxQueue: 2,
+      onEvent: (event) => {
+        if (event.type === 'drop') dropped.push(event.message)
+      },
+    })
+    capped.attach(assertiveEl, politeEl)
+
+    for (const message of ['one', 'two', 'three', 'four']) capped.announce(message)
+    expect(dropped).toEqual(['one', 'two']) // only the two freshest survive
+
+    vi.advanceTimersByTime(0)
+    expect(texts(politeEl)).toEqual(['three'])
+    vi.advanceTimersByTime(1150)
+    expect(texts(politeEl)).toEqual(['four'])
+
+    capped.destroy()
+  })
+
+  it('clear() drops pending work and removes the live node', () => {
+    queue.announce('first')
+    queue.announce('second')
+    vi.advanceTimersByTime(0)
+    expect(texts(politeEl)).toEqual(['first'])
+
+    queue.clear()
+    expect(texts(politeEl)).toEqual([])
+
+    vi.advanceTimersByTime(5000)
+    expect(texts(politeEl)).toEqual([]) // 'second' never speaks
+  })
+
+  it('clear(priority) leaves the other priority alone', () => {
+    queue.announce('status')
+    queue.announce('alert', { priority: 'assertive' })
+    vi.advanceTimersByTime(0)
+    expect(texts(assertiveEl)).toEqual(['alert'])
+
+    queue.clear('polite')
+    vi.advanceTimersByTime(0)
+    expect(texts(assertiveEl)).toEqual(['alert'])
+    vi.advanceTimersByTime(5000)
+    expect(texts(politeEl)).toEqual([])
+  })
+
+  it('accepts new announcements after clear()', () => {
+    queue.announce('old news')
+    vi.advanceTimersByTime(0)
+    queue.clear()
+
+    queue.announce('fresh')
+    vi.advanceTimersByTime(150) // cooldown after the cleared node
+    expect(texts(politeEl)).toEqual(['fresh'])
+  })
+
+  it('reports the lifecycle through onEvent', () => {
+    const events: string[] = []
+    const observed = createAnnounceQueue({
+      clearAfter: 1000,
+      onEvent: (event) => events.push(`${event.type}:${event.priority}:${event.message}:${event.id}`),
+    })
+    observed.attach(assertiveEl, politeEl)
+
+    observed.announce('ping', { clearAfter: 300 })
+    observed.announce('ping', { clearAfter: 300 }) // deduped while pending
+    vi.advanceTimersByTime(0)
+    expect(events).toEqual(['enqueue:polite:ping:1', 'skip:polite:ping:2', 'insert:polite:ping:1'])
+
+    vi.advanceTimersByTime(300)
+    expect(events[events.length - 1]).toBe('clear:polite:ping:1')
+
+    observed.destroy()
+  })
+
+  it('flags an interrupted clear event', () => {
+    const events: { type: string; interrupted?: boolean }[] = []
+    const observed = createAnnounceQueue({ clearAfter: 1000, onEvent: (event) => events.push(event) })
+    observed.attach(assertiveEl, politeEl)
+
+    observed.announce('status', { clearAfter: 5000 })
+    vi.advanceTimersByTime(0)
+    observed.announce('alert', { priority: 'assertive' })
+    vi.advanceTimersByTime(0)
+
+    expect(events.find((event) => event.type === 'clear')).toMatchObject({ interrupted: true })
+
+    observed.destroy()
+  })
+
+  it('stops emitting events after destroy()', () => {
+    const onEvent = vi.fn()
+    const observed = createAnnounceQueue({ clearAfter: 1000, onEvent })
+    observed.attach(assertiveEl, politeEl)
+    observed.destroy()
+
+    observed.announce('silent')
+    vi.advanceTimersByTime(1000)
+    expect(onEvent).not.toHaveBeenCalled()
   })
 
   it('destroy() drops pending work and stops timers', () => {

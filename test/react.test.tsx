@@ -3,11 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AnnounceQueueProvider, useAnnounce } from '../src/react.js'
 
 function Trigger({ message, assertive }: { message: string; assertive?: boolean }) {
-  const { announce } = useAnnounce()
+  const { announce, clear } = useAnnounce()
   return (
-    <button onClick={() => announce(message, assertive ? { priority: 'assertive' } : undefined)}>
-      announce
-    </button>
+    <>
+      <button onClick={() => announce(message, assertive ? { priority: 'assertive' } : undefined)}>
+        announce
+      </button>
+      <button onClick={() => clear()}>clear</button>
+    </>
   )
 }
 
@@ -38,7 +41,7 @@ describe('AnnounceQueueProvider', () => {
     )
 
     act(() => {
-      screen.getByRole('button').click()
+      screen.getByRole('button', { name: 'announce' }).click()
       vi.advanceTimersByTime(150)
     })
 
@@ -54,7 +57,7 @@ describe('AnnounceQueueProvider', () => {
     )
 
     act(() => {
-      screen.getByRole('button').click()
+      screen.getByRole('button', { name: 'announce' }).click()
       vi.advanceTimersByTime(150)
     })
 
@@ -69,13 +72,30 @@ describe('AnnounceQueueProvider', () => {
     )
 
     act(() => {
-      screen.getByRole('button').click()
+      screen.getByRole('button', { name: 'announce' }).click()
       vi.advanceTimersByTime(0)
     })
     expect(screen.getByRole('status').textContent).toBe('temp')
 
     act(() => void vi.advanceTimersByTime(200))
     expect(screen.getByRole('status').textContent).toBe('')
+  })
+
+  it('forwards engine events to the onEvent prop', () => {
+    const onEvent = vi.fn()
+    render(
+      <AnnounceQueueProvider onEvent={onEvent} clearAfter={200}>
+        <Trigger message="watched" />
+      </AnnounceQueueProvider>,
+    )
+
+    act(() => {
+      screen.getByRole('button', { name: 'announce' }).click()
+      vi.advanceTimersByTime(200)
+    })
+
+    expect(onEvent.mock.calls.map(([event]) => event.type)).toEqual(['enqueue', 'insert', 'clear'])
+    expect(onEvent.mock.calls[0]?.[0]).toMatchObject({ message: 'watched', priority: 'polite' })
   })
 
   it('clears timers on unmount', () => {
@@ -85,11 +105,28 @@ describe('AnnounceQueueProvider', () => {
       </AnnounceQueueProvider>,
     )
 
-    act(() => void screen.getByRole('button').click())
+    act(() => void screen.getByRole('button', { name: 'announce' }).click())
     unmount()
 
     expect(() => vi.advanceTimersByTime(5000)).not.toThrow()
     expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('clear() from the hook empties the region', () => {
+    render(
+      <AnnounceQueueProvider>
+        <Trigger message="stale" />
+      </AnnounceQueueProvider>,
+    )
+
+    act(() => {
+      screen.getByRole('button', { name: 'announce' }).click()
+      vi.advanceTimersByTime(0)
+    })
+    expect(screen.getByRole('status').textContent).toBe('stale')
+
+    act(() => void screen.getByRole('button', { name: 'clear' }).click())
+    expect(screen.getByRole('status').textContent).toBe('')
   })
 
   it('throws a clear error when used outside the provider', () => {
