@@ -26,7 +26,8 @@
     "knip": "knip",
     "ci": "npm run typecheck && npm run knip && npm run test && npm run build && npm run demo:build",
     "demo": "vite demo",
-    "demo:build": "vite build demo"
+    "demo:build": "vite build demo",
+    "prepublishOnly": "npm run ci"
   },
   "keywords": [
     "a11y",
@@ -52,5 +53,20 @@
     "typescript": "^5.7.2",
     "vite": "^5.4.21",
     "vitest": "^2.1.8"
+  },
+  "author": "kirilinsky (https://github.com/kirilinsky)",
+  "homepage": "https://github.com/kirilinsky/announce-queue#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kirilinsky/announce-queue.git"
+  },
+  "bugs": {
+    "url": "https://github.com/kirilinsky/announce-queue/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
