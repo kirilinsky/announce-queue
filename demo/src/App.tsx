@@ -368,7 +368,7 @@ function EventLog({ log }: { log: LogLine[] }) {
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    ref.current?.scrollTo({ top: ref.current.scrollHeight })
+    if (ref.current) ref.current.scrollTop = ref.current.scrollHeight
   }, [log])
 
   return (
